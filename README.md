@@ -13,7 +13,7 @@ If you intend to run the training pipeline (SFT or DPO), this project relies on 
 
 2. Set up environment variables
 
-Following **[FlashSearcher](https://github.com/OPPO-PersonalAI/Flash-Searcher)**, our framework uses `SearchTool` and `CrawlTool` for web search and page crawling. These tools require setting environment variables with the corresponding API keys, depending on the selected provider:"
+Following **[FlashSearcher](https://github.com/OPPO-PersonalAI/Flash-Searcher)**, our framework uses `SearchTool` and `CrawlTool` for web search and page crawling. These tools require setting environment variables with the corresponding API keys, depending on the selected provider:
 
 * `SERPER_API_KEY` for SerpApi: [Serper](https://serper.dev/)
 * `JINA_API_KEY` for JinaApi: [JinaAI](https://jina.ai/)
@@ -44,7 +44,7 @@ The underlying tools required to reproduce the functionality of these planning s
 *   `tools.py`
 *   `cosight_tool.py`
 
-### collect raw train data by `PlanFactory/collect_train_data.py`
+Collect raw train data using `PlanFactory/collect_train_data.py`
 ```bash
 python collect_train_data.py --infile /path/to/benchmark_file.json --outfile ./output/train_data.jsonl --concurrency 10 --sample_num 20
 ```
