@@ -1,0 +1,236 @@
+python_code: |-
+  <<<PYTHON>>>
+  import textwrap
+  import json
+  from typing import Any, Callable, Dict, List, Optional
+  from jinja2 import StrictUndefined, Template
+
+  from ..memory import ActionStep, AgentMemory, PlanningStep, SummaryStep
+  from ..models import ChatMessage, MessageRole
+  from ..monitoring import AgentLogger, LogLevel
+  from ..tools import Tool
+  from rich.rule import Rule
+  from rich.text import Text
+  from .base_planning import BasePlanning
+
+  def populate_template(template: str, variables: Dict[str, Any]) -> str:
+      compiled_template = Template(template, undefined=StrictUndefined)
+      try:
+          return compiled_template.render(**variables)
+      except Exception as e:
+          raise Exception(f"Error during jinja template rendering: {type(e).__name__}: {e}")
+
+  class PlannerPlanning(BasePlanning):
+      def __init__(self, model, tools, prompt_templates, memory, logger):
+          super().__init__(model, tools, prompt_templates, memory, logger)
+
+      def _get_agent(self):
+          for tool in self.tools.values():
+              if hasattr(tool, "agent"): return tool.agent
+          return None
+
+      def topology_initialize(self, task: str) -> PlanningStep:
+          self.logger.log(Rule("[bold]Decomposing Task into Flow Graph", style="cyan"), level=LogLevel.INFO)
+
+          agent = self._get_agent()
+          if not agent:
+              return PlanningStep(model_input_messages=[], plan="Agent reference not found.", plan_think="", plan_reasoning="Failed.")
+
+          # Step 0.1: Initialize with Answer Node n1
+          agent.knowledge_graph = {
+              "nodes": {
+                  "n1": {
+                      "node_id": "n1",
+                      "type": "answer",
+                      "task": task,
+                      "status": "pending",
+                      "context": ""
+                  }
+              },
+              "edges": []
+          }
+
+          # Step 0.2: Call Model to Expand Graph from n2 onwards
+          current_graph_str = json.dumps(agent.knowledge_graph, indent=2, ensure_ascii=False)
+          system_prompt = populate_template(
+              self.prompt_templates["planning"]["initial_plan"],
+              variables={"task": task, "current_graph": current_graph_str}
+          )
+          input_messages = [{"role": MessageRole.SYSTEM, "content": [{"type": "text", "text": system_prompt}]}]
+
+          chat_message_plan: ChatMessage = self.model(input_messages)
+          content = chat_message_plan.content
+
+          json_content = content
+          if "```json" in content:
+              json_content = content.split("```json")[1].split("```")[0].strip()
+          elif "{" in content:
+              json_content = content[content.find("{"):content.rfind("}")+1]
+
+          try:
+              graph_data = json.loads(json_content)
+              # Merge expanded nodes and edges
+              for node in graph_data.get("nodes", []):
+                  nid = node.get("node_id") or node.get("id")
+                  if not nid: continue
+
+                  task_type = node.get("type") or node.get("task_type") or "search"
+                  task_text = node.get("task") or node.get("content") or node.get("description")
+
+                  if task_type not in ["search", "solve", "answer"]: task_type = "search"
+
+                  # Update or Add node
+                  agent.knowledge_graph["nodes"][nid] = {
+                      "node_id": nid,
+                      "type": task_type,      # ti
+                      "task": task_text,      # di
+                      "status": "pending",    # si
+                      "context": ""           # ci
+                  }
+
+              for edge in graph_data.get("edges", []):
+                  s, t = edge.get("source") or edge.get("from"), edge.get("target") or edge.get("to")
+                  if s and t:
+                      if [str(s), str(t)] not in agent.knowledge_graph["edges"]:
+                          agent.knowledge_graph["edges"].append([str(s), str(t)])
+
+          except Exception as e:
+              self.logger.log(f"Graph expansion failed: {e}", level=LogLevel.ERROR)
+
+          # Step 0.3: Readable Output (Final Presentation)
+          readable_plan = "### Knowledge Flow Graph Construction Summary:\n"
+          readable_plan += "1. Initialized target 'answer' node n1.\n"
+          readable_plan += "2. Expanded flow with sub-tasks to resolve n1.\n\n"
+
+          ready_nodes = []
+          readable_plan += "### Final Presentation of Nodes (v_i = [t_i, d_i, s_i, c_i]):\n"
+          for nid, n in agent.knowledge_graph["nodes"].items():
+              readable_plan += f"Node {nid}: ti={n['type']}, di={n['task']}, si={n['status']}, ci={n['context']}\n"
+              # Calculate initial ready nodes
+              deps = [e[0] for e in agent.knowledge_graph["edges"] if e[1] == nid]
+              if not deps:
+                  ready_nodes.append({
+                      "node_id": nid, "ti": n['type'], "di": n['task'], "si": n['status'], "ci": n['context']
+                  })
+
+          readable_plan += "\n### Final Presentation of Edges (e_ij):\n"
+          for e in agent.knowledge_graph["edges"]:
+              readable_plan += f"Edge: {e[0]} -> {e[1]}\n"
+
+          readable_plan += f"\n\n### INITIAL READY NODES:\n{json.dumps(ready_nodes, indent=2, ensure_ascii=False)}"
+          self.logger.log(Text(readable_plan, style="green"), level=LogLevel.INFO)
+
+          planning_step = PlanningStep(model_input_messages=input_messages, plan=readable_plan, plan_think=chat_message_plan.reasoning_content or "", plan_reasoning="Graph decomposition and expansion complete.")
+          self.memory.steps.append(planning_step)
+          return planning_step
+
+      def adaptation(self, task, step, write_memory_to_messages) -> SummaryStep:
+          agent = self._get_agent()
+          graph_status = json.dumps(agent.knowledge_graph, indent=2, ensure_ascii=False) if agent and hasattr(agent, "knowledge_graph") else "{}"
+
+          refine_instruction = textwrap.dedent(f"""
+              Current Knowledge Flow Graph Status:
+              {graph_status}
+
+              Analyze progress. Your response MUST be a JSON tool call:
+              - Call `Executor(node_id, ti, di, si, ci)` for ready nodes.
+              - Call `Refine(...)` to update results and structure.
+              - Call `final_answer` if complete.
+          """)
+
+          input_messages = write_memory_to_messages(None, False)
+          input_messages.append({"role": MessageRole.USER, "content": [{"type": "text", "text": refine_instruction}]})
+
+          chat_message_summary: ChatMessage = self.model(input_messages)
+          summary_step = SummaryStep(model_input_messages=input_messages, summary=chat_message_summary.content, summary_reasoning=chat_message_summary.reasoning_content or "")
+          self.memory.steps.append(summary_step)
+          return summary_step
+
+  <<<END_PYTHON>>>
+yaml_config: |-
+  <<<YAML>>>
+  system_prompt: |-
+    You are a deep research agent to solve tasks. You manage a dynamic Knowledge Flow Graph $G = (V, E)$.
+    
+    # CORE FORMALIZATION (v_i = (t_i, d_i, s_i, c_i)):
+    - $t_i$ (type): `search` (gathering evidence), `solve` (logic/synthesis), or `answer` (final goal).
+    - $d_i$ (description): The specific sub-task.
+    - $s_i$ (status): `pending`, `success`, or `failed`.
+    - $c_i$ (context): The distilled knowledge produced after execution.
+    - $e_{ij}$ (edge): Directed dependency where $v_i$ provides necessary knowledge for $v_j$.
+  
+    # CORE OPERATING PROTOCOL:
+    1. Observe & Execute: Identify ALL "Ready" nodes (those with $s_i = pending$ and all predecessors are $success$) from your memory or the last `Refine` output. 
+       - PARALLEL EXECUTION: You SHOULD call `Executor(node_id, ti, di, si, ci)` for ALL ready nodes in a single turn to enable parallel processing.
+       - Example: If n2 and n3 are all ready, call `Executor` for all three in one tool call list.
+       - Note: `Executor` internally handles multi-step tool trajectories for `search` nodes.
+    2. Commit & Adapt (Refine): After execution, you MUST call `Refine(...)` for EACH executed node to:
+       - Update the node's $s_i$ and $c_i$.
+       - Dynamic Adaptation: If the results show missing gaps or a wrong direction, use `add_nodes`, `del_nodes`, `add_edges`, or `del_edges` to adjust the graph structure.
+    3. Termination: Once `n1` (type: `answer`) has status `success`, use its $c_i$ to call `final_answer`.
+  
+    # CRITICAL CONSTRAINTS:
+    - Single Answer Node: There MUST be exactly one node of type `answer`, which is `n1`.
+    - DAG Property: Ensure the graph remains a Directed Acyclic Graph.
+    - STRICT JSON: ALWAYS return: {"think": "...", "tools": [{"name": "...", "arguments": {...}}]}
+  
+    # Available Tools:
+    {%- for tool in tools.values() %}
+    - {{ tool.name }}: {{ tool.description }}
+        Takes inputs: {{tool.inputs}}
+        Returns an output of type: {{tool.output_type}}
+    {%- endfor %}
+  
+  planning:
+    initial_plan: |-
+      Task: {{task}}
+      Current Graph: {{current_graph}}
+      
+      You are the Knowledge Flow Planner. Your goal is to decompose the user query into a structured DAG.
+      The graph currently contains only the root 'answer' node (n1).
+      
+      ### ADAPTIVE COMPLEXITY RULES:
+      1. Simple Tasks: If the query is a direct factual question, create a simple graph.
+      2. Complex Tasks: If the query involves multi-dimensional research, comparisons, or multi-step verification, decompose it into multiple specialized `search` nodes and `solve` nodes for intermediate synthesis.
+      3. Efficiency: Only add nodes that are strictly necessary. Do not over-complicate simple tasks.
+      
+      ### EXPANSION RULES:
+      1. **Decomposition**: Add `search` nodes for retrieving data and `solve` nodes for logical deductions or summarizing.
+      2. **Dependencies & Knowledge Flow**: Create edges $e_{ij}$ to represent knowledge flow. 
+         - **CRITICAL**: If a `solve` node requires data from a `search` node, there MUST be an edge from `search` to `solve` (e.g., `n2 -> n4`).
+         - All paths should eventually lead to `n1`.
+      3. **Constraint**: Do NOT create another `answer` node. `n1` is unique.
+      
+      ### OUTPUT FORMAT:
+      Return the COMPLETE expanded graph as JSON only:
+      {
+        "nodes": [
+          {"node_id": "n1", "type": "answer", "task": "{{task}}"},
+          {"node_id": "n2", "type": "search", "task": "..."},
+          ...
+        ],
+        "edges": [
+          {"source": "n2", "target": "n1"},
+          ...
+        ]
+      }
+  
+  step:
+    pre_messages: |-
+      Task: {{task}}
+      STRICT SEQUENCE:
+      1. Identify Ready nodes ($s_i=pending$ and dependencies met).
+      2. Run node via `Executor(node_id, ti, di, si, ci)`.
+      3. Update via `Refine(node_id, knowledge_ci, status_si, ...)`.
+      4. If 'n1' is success, call `final_answer`.
+      
+      OUTPUT JSON NOW.
+  
+  refining:
+    prompt: |-
+      Current Graph Status:
+      {{graph_status}}
+      
+      Evaluate the progress. If a node `failed` or revealed a new sub-problem, use `Refine` to adapt the graph. 
+      Otherwise, move to the next Ready node using `Executor`.
+  <<<END_YAML>>>

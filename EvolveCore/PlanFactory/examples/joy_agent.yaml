@@ -1,0 +1,305 @@
+python_code: |-
+  <<<PYTHON>>>
+  import json
+  import textwrap
+  from typing import Any, Callable, Dict, List, Optional
+  from jinja2 import StrictUndefined, Template
+
+  from ..memory import ActionStep, AgentMemory, PlanningStep, SummaryStep
+  from ..models import ChatMessage, MessageRole
+  from ..monitoring import AgentLogger, LogLevel
+  from ..tools import Tool
+  from rich.rule import Rule
+  from rich.text import Text
+  from .base_planning import BasePlanning
+
+  def populate_template(template: str, variables: Dict[str, Any]) -> str:
+      compiled_template = Template(template, undefined=StrictUndefined)
+      try:
+          return compiled_template.render(**variables)
+      except Exception as e:
+          raise Exception(f"Error during jinja template rendering: {type(e).__name__}: {e}")
+
+
+  class PlannerPlanning(BasePlanning):
+
+      def _get_role_info(self) -> Dict[str, str]:
+          content = self.prompt_templates.get("system_prompt", "")
+          if "coordination agent" in content.lower():
+              return {"name": "Task Augmentation", "style": "bold yellow", "title_suffix": ""}
+          if "plan-and-execute expert" in content.lower():
+              return {"name": "PE-Worker", "style": "cyan", "title_suffix": " Roadmap"}
+          if "react expert" in content.lower():
+              return {"name": "ReAct-Worker", "style": "magenta", "title_suffix": " Strategy"}
+          return {"name": "Worker", "style": "blue", "title_suffix": " Planning"}
+
+      def topology_initialize(self, task: str) -> PlanningStep:
+          role = self._get_role_info()
+          retrieved_knowledge = ""
+
+          # 1. Semantic Memory Retrieval (Supervisor only)
+          if role['name'] == "Task Augmentation":
+              vector_tool = self.tools.get("vector_similarity_retrieve")
+              if vector_tool:
+                  try:
+                      # Search through current memory steps (which include historical Knowledge Units)
+                      retrieved_knowledge = vector_tool.forward(task)
+                      if "No historical action steps" in retrieved_knowledge or "Error" in retrieved_knowledge:
+                          retrieved_knowledge = ""
+                      else:
+                          # Token Optimization: Strictly truncate historical context
+                          if len(retrieved_knowledge) > 500:
+                              retrieved_knowledge = retrieved_knowledge[:500] + "... (truncated)"
+
+                          # Format history to be clearly distinct from current task
+                          retrieved_knowledge = f"\n[PAST EXPERIENCE (For Reference Only)]:\n{retrieved_knowledge}"
+                          self.logger.log(Text("\n[Semantic Memory] Relevant historical context retrieved.", style="italic cyan"), level=LogLevel.INFO)
+                  except Exception:
+                      retrieved_knowledge = ""
+
+          input_messages = [
+              {
+                  "role": MessageRole.SYSTEM,
+                  "content": [
+                      {
+                          "type": "text",
+                          "text": populate_template(
+                              self.prompt_templates["planning"]["initial_plan"],
+                              variables={"tools": self.tools, "retrieved_knowledge": retrieved_knowledge, "task": task},
+                          ),
+                      }
+                  ],
+              },
+          ]
+          task_messages = [{
+              "role": MessageRole.USER,
+              "content": [{"type": "text", "text": populate_template(self.prompt_templates["planning"]["task_input"], variables={"task": task})}],
+          }]
+
+          chat_message_plan: ChatMessage = self.model(input_messages + task_messages)
+          plans_answer = chat_message_plan.content
+          think_content = getattr(chat_message_plan, "reasoning_content", "")
+
+          title = f"{role['name']}{role['title_suffix']}"
+
+          self.logger.log(
+              Rule(title, style=role['style']),
+              Text(f"\n{plans_answer}\n"),
+              level=LogLevel.INFO,
+          )
+
+          planning_step = PlanningStep(
+              model_input_messages=input_messages,
+              plan=plans_answer,
+              plan_think="",
+              plan_reasoning=think_content,
+          )
+          self.memory.steps.append(planning_step)
+          return planning_step
+
+      def adaptation(
+          self,
+          task: str,
+          step: int,
+          write_memory_to_messages: Callable[[Optional[List[ActionStep]], Optional[bool]], List[Dict[str, str]]]
+      ) -> SummaryStep:
+          role = self._get_role_info()
+          if role['name'] == "Task Augmentation":
+              return SummaryStep(model_input_messages=[], summary="Monitoring ensemble execution...", summary_reasoning="")
+
+          # Worker Summary Policy: STRICTLY Progress-only, NO re-planning.
+          memory_messages = write_memory_to_messages(None, False)[1:]
+          summary_policy = "\n[SUMMARY POLICY]: Report progress ONLY. DO NOT change the initial roadmap or propose new plans."
+
+          input_messages = [
+              {"role": MessageRole.SYSTEM, "content": [{"type": "text", "text": self.prompt_templates["summary"]["update_pre_messages"] + summary_policy}]},
+              *memory_messages,
+              {"role": MessageRole.USER, "content": [{"type": "text", "text": self.prompt_templates["summary"]["update_post_messages"]}]}
+          ]
+
+          chat_message_summary: ChatMessage = self.model(input_messages)
+          summary_answer = chat_message_summary.content
+          summary_cot = getattr(chat_message_summary, "reasoning_content", "")
+
+          self.logger.log(
+              Rule(f"{role['name']} Execution Summary", style="blue"),
+              Text(f"\n{summary_answer}\n"),
+              level=LogLevel.INFO,
+          )
+
+          summary_step = SummaryStep(input_messages, summary_answer, summary_cot)
+          self.memory.steps.append(summary_step)
+          return summary_step
+  <<<END_PYTHON>>>
+yaml_config: |-
+  <<<YAML>>>
+  system_prompt: |-
+    You are a coordination agent to solve tasks. You solve the task by:
+    1. CALL `ensemble_executor` with the original task.
+    2. CALL `vote_and_synthesize` once experts report back.
+    3. CALL `final_answer` with the final verdict.
+
+    [RULES]:
+    - Use JSON list of tool calls: [{"name": "...", "arguments": {...}}]
+    -  Use key `"name"` for the tool name. Do NOT use `"tool"`.
+    -  Use key `"arguments"` for parameters. Do NOT use `"args"`.
+    - DO NOT call `vector_similarity_retrieve` (it is handled automatically).
+    - NEVER perform reasoning or search yourself.
+
+    ### Tools:
+    {%- for tool in tools.values() %}
+    - {{ tool.name }}: {{ tool.description }}
+    {%- endfor %}
+
+  planning:
+    initial_plan: |-
+      ### Task Augmentation
+      [OUTPUT INSTRUCTION]: Strictly provide ONLY the following fields. NO other text.
+      - Task: [Provide ONLY the core question description from {{task}}. DO NOT include any answers or findings from History.]
+      - History: {{ retrieved_knowledge if retrieved_knowledge else "None" }}
+      - Complexity: [Determine: Simple/Complex]
+      - Experts: PE: 1, ReAct: [1 if Simple, 2 if Complex]
+
+      [STRICT RULE]: The 'Task' field must only reflect the user's request, NOT the results found in 'History'.
+      [STOP]: YOUR OUTPUT MUST END HERE.
+    task_input: |-
+      Task: {{task}}
+
+  step:
+    pre_messages: |-
+      [DIRECTIVE]
+      1. REVIEW HISTORY: Do NOT repeat failed calls. Look at previous observations.
+      2. PHASE ENFORCEMENT:
+         - If `ensemble_executor` NOT called: CALL it NOW.
+         - If you have expert results: CALL `vote_and_synthesize` NOW.
+         - If you have the verdict: CALL `final_answer` NOW.
+
+      [FORMAT]: JSON list of tool calls only.
+      MANDATORY: [{"name": "tool_name", "arguments": {"arg": "val"}}]
+
+      Tool Definitions:
+      {{tool_functions_json}}
+
+      Task: {{task}}
+
+  pe_worker:
+    system_prompt: |-
+      You are a Plan-and-Execute Expert.
+      1. Plan roadmap. 2. Execute. 3. Final answer.
+      [CRITICAL]: Plan ONLY ONCE. Stay on roadmap.
+      [TOOL CALLS]: Output ONLY a single JSON object: {"think": "...", "tools": [{"name": "...", "arguments": {...}}]}
+      - web_search: use {"query": "..."}
+      - crawl_page: use {"url": "...", "query": "..."}
+      - reasoning: use {"task": "..."}
+      - final_answer: use {"answer": "..."}
+
+      ### Tools:
+      {%- for tool in tools.values() %}
+      - {{ tool.name }}: {{ tool.description }}
+      {%- endfor %}
+
+    planning:
+      initial_plan: |-
+        ### Roadmap (One-time)
+        1. [Primary Search]: Targeted query.
+        2. [Content Extraction]: Deep crawl.
+        3. [Verification]: Cross-check facts.
+        4. [Final Synthesis]: Definitive answer.
+        [STRICT]: Follow roadmap. No re-planning.
+      task_input: |-
+        Task: {{task}}. Generate roadmap.
+
+    summary:
+      update_pre_messages: "Reporting progress..."
+      update_post_messages: |-
+        Summarize status vs roadmap. NO re-planning.
+
+    step:
+      pre_messages: |-
+        1. REVIEW HISTORY: Look at previous observations. If a search failed or returned no results, CHANGE your query (make it shorter or use different keywords).
+        2. Roadmap Adherence: Follow the plan but be smart about tool arguments.
+
+        Task: {{task}}
+        JSON ONLY.
+
+    final_answer:
+      pre_messages: "Finalizing Plan-Execute answer."
+      post_messages: |-
+        Return JSON: {"think": "...", "answer": "..."}
+
+  react_worker:
+    system_prompt: |-
+      You are a ReAct Expert.
+      Loop: Thought → Action → Observation.
+      [TOOL CALLS]: Output ONLY a single JSON object: {"think": "...", "tools": [{"name": "...", "arguments": {...}}]}
+      - web_search: use {"query": "..."}
+      - crawl_page: use {"url": "...", "query": "..."}
+      - reasoning: use {"task": "..."}
+      - final_answer: use {"answer": "..."}
+
+      ### Tools:
+      {%- for tool in tools.values() %}
+      - {{ tool.name }}: {{ tool.description }}
+      {%- endfor %}
+
+    planning:
+      initial_plan: |-
+        ### ReAct Strategy
+        Loop: Think → Act → Observe.
+      task_input: |-
+        Task: {{task}}. State strategy.
+
+    summary:
+      update_pre_messages: "Analyzing exploration..."
+      update_post_messages: |-
+        Summarize findings. Adapt if blocked.
+
+    step:
+      pre_messages: |-
+        [DIRECTIVE]
+        1. REVIEW HISTORY: Do NOT repeat failed tool calls or identical search queries.
+        2. ADAPTATION: If 'No results found', simplify your query. Avoid long sentences in `web_search`.
+
+        Task: {{task}}
+        JSON ONLY.
+
+    final_answer:
+      pre_messages: "Finalizing ReAct answer."
+      post_messages: |-
+        Return JSON: {"think": "...", "answer": "..."}
+
+  final_answer:
+    pre_messages: "Ensemble arbitration complete."
+    post_messages: |-
+      Final answer for: {{task}}. Return JSON {think, answer}.
+
+  critic:
+    prompt: |-
+      Judge expert answers for: {{task}}
+
+      ### Candidates
+      {%- for cand in candidates %}
+      - EXPERT: {{ cand.agent_name }}
+      - ANSWER: {{ cand.answer }}
+      - TRACE: {{ cand.message_object.intermediate_evidence | tojson }}
+      {%- endfor %}
+
+      ### Instructions
+      1. Check Compliance, Evidence, and Logic.
+      2. If Majority exists & evidenced, prioritize it.
+      3. Return JSON: {"think": "...", "verdict_answer": "...", "confidence": 0.0-1.0}
+      [CRITICAL]: Definitive answer required.
+
+  distiller:
+    prompt: |-
+      ### Distill Knowledge Unit
+      Problem: {{task}}
+      Trace: {{trajectory}}
+      Answer: {{answer}}
+      Format:
+      [Problem]: ...
+      [Strategy]: ...
+      [Findings]: ...
+      [Conclusion]: ...
+      (Return block ONLY)
+  <<<END_YAML>>>

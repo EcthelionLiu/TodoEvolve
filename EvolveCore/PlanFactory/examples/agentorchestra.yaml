@@ -1,0 +1,268 @@
+python_code: |-
+  <<<PYTHON>>>
+  import textwrap
+  import json
+  from typing import Any, Callable, Dict, List, Optional
+  from jinja2 import StrictUndefined, Template
+
+  from ..memory import ActionStep, AgentMemory, PlanningStep, SummaryStep
+  from ..models import ChatMessage, MessageRole
+  from ..monitoring import AgentLogger, LogLevel
+  from ..tools import Tool
+  from rich.rule import Rule
+  from rich.text import Text
+  from .base_planning import BasePlanning
+
+  def populate_template(template: str, variables: Dict[str, Any]) -> str:
+      compiled_template = Template(template, undefined=StrictUndefined)
+      try:
+          return compiled_template.render(**variables)
+      except Exception as e:
+          raise Exception(f"Error during jinja template rendering: {type(e).__name__}: {e}")
+
+  class PlannerPlanning(BasePlanning):
+      def __init__(
+          self,
+          model: Callable[[List[Dict[str, str]]], ChatMessage],
+          tools: Dict[str, Tool],
+          prompt_templates: Dict[str, Any],
+          memory: AgentMemory,
+          logger: AgentLogger
+      ):
+          super().__init__(model, tools, prompt_templates, memory, logger)
+          self.orchestra_tasks = []
+
+      def topology_initialize(self, task: str) -> PlanningStep:
+          self.logger.log(
+              Rule("[bold]AGENTORCHESTRA Planning", style="cyan"),
+              level=LogLevel.INFO,
+          )
+
+          messages = [
+              {
+                  "role": MessageRole.SYSTEM,
+                  "content": [
+                      {
+                          "type": "text",
+                          "text": populate_template(
+                              self.prompt_templates["planning"]["initial_plan"],
+                              variables={"task": task},
+                          ),
+                      }
+                  ],
+              }
+          ]
+
+          try:
+              # Use the model to decompose the task
+              response: ChatMessage = self.model(messages)
+              content = response.content
+
+              # Basic cleanup of the response content
+              if "```json" in content:
+                  content = content.split("```json")[1].split("```")[0]
+              elif "```" in content:
+                  content = content.split("```")[1].split("```")[0]
+
+              tasks_data = json.loads(content.strip())
+
+              if not isinstance(tasks_data, list):
+                  raise ValueError("Model response is not a list")
+
+              self.orchestra_tasks = []
+              for i, t in enumerate(tasks_data):
+                  self.orchestra_tasks.append({
+                      "id": i,
+                      "description": t.get("description", "Unknown task"),
+                      "priority": t.get("priority", "medium"),
+                      "category": t.get("category", "general"),
+                      "status": "pending",
+                      "result": None
+                  })
+
+              plan_text = "\n".join([f"{i}. [{t['priority'].upper()}] {t['description']}" for i, t in enumerate(self.orchestra_tasks)])
+              self.logger.log(
+                  Text(f"Decomposed objective into {len(self.orchestra_tasks)} tasks:\n{plan_text}"),
+                  level=LogLevel.INFO
+              )
+
+          except Exception as e:
+              self.logger.log(Text(f"Failed to decompose task via LLM: {str(e)}. Falling back to single-task mode."), level=LogLevel.WARNING)
+              self.orchestra_tasks = [{
+                  "id": 0,
+                  "description": task,
+                  "priority": "high",
+                  "category": "general",
+                  "status": "pending",
+                  "result": None
+              }]
+              plan_text = f"1. [HIGH] {task}"
+
+          planning_step = PlanningStep(
+              model_input_messages=messages,
+              plan=plan_text,
+              plan_think="Automated task decomposition completed. The system is ready for structured execution.",
+              plan_reasoning="Hierarchical decomposition into manageable steps. The model must now use 'check_plan_progress' to begin execution and follow the mandatory JSON output format strictly.",
+          )
+          self.memory.steps.append(planning_step)
+          return planning_step
+
+      def adaptation(
+          self,
+          task: str,
+          step: int,
+          write_memory_to_messages: Callable[[Optional[List[ActionStep]], Optional[bool]], List[Dict[str, str]]]
+      ) -> SummaryStep:
+          self.logger.log(
+              Rule("[bold]AGENTORCHESTRA Progress Check & Summary", style="cyan"),
+              level=LogLevel.INFO,
+          )
+
+          # Get all messages including the system prompt and previous steps
+          memory_messages = write_memory_to_messages()
+
+          # Construct messages for the model to generate a summary
+          messages = memory_messages + [
+              {
+                  "role": MessageRole.USER,
+                  "content": [
+                      {
+                          "type": "text",
+                          "text": populate_template(
+                              self.prompt_templates["summary"]["update_post_messages"],
+                              variables={
+                                  "task": task,
+                                  "step": step,
+                                  "orchestra_tasks": json.dumps(self.orchestra_tasks, indent=2, ensure_ascii=False)
+                              }
+                          ),
+                      }
+                  ],
+              }
+          ]
+
+          try:
+              response: ChatMessage = self.model(messages)
+              summary_content = response.content
+              summary_reasoning = getattr(response, "reasoning_content", "Periodic status review for hierarchical orchestration.")
+
+              self.logger.log(
+                  Text(f"Strategic Summary (Step {step}):\n{summary_content}"),
+                  level=LogLevel.INFO
+              )
+
+              summary_step = SummaryStep(
+                  model_input_messages=messages,
+                  summary=summary_content,
+                  summary_reasoning=summary_reasoning,
+              )
+          except Exception as e:
+              self.logger.log(Text(f"Failed to generate summary: {str(e)}"), level=LogLevel.WARNING)
+              summary_step = SummaryStep(
+                  model_input_messages=[],
+                  summary="Monitoring execution progress. Summary generation failed, but the process continues.",
+                  summary_reasoning=f"Error: {str(e)}",
+              )
+
+          self.memory.steps.append(summary_step)
+          return summary_step
+  <<<END_PYTHON>>>
+yaml_config: |-
+  <<<YAML>>>
+    system_prompt: |
+    You are a hierarchical multi-agent framework.
+    Your goal is to solve complex tasks with maximum efficiency by coordinating specialized sub-agents (tools) and maintaining a structured execution plan.
+
+    **Acceleration & Strategic Rules**:
+    1. Status Awareness: Always call `check_plan_progress` to sync your mental state with the actual execution plan before major actions.
+    2. Search Exhaustion Strategy: If specific keyword searches (web_search) fail several times or yield no new relevant URLs, do NOT repeat similar queries. Immediately switch to `reasoning` to analyze the failure, deduce alternative identifiers (DOIs, author names, volume/issue patterns), and formulate a more precise search strategy.
+    3. Parallel Execution: If multiple sub-tasks are independent, you MUST invoke their corresponding tool calls in a SINGLE "tools" array to save steps.
+    4. Proactive Reporting: Use `update_plan_status` immediately after a task yields actionable data. You can combine an update call with the next execution call in the same response.
+    5. Truthfulness & Adaptation: If a sub-task is impossible or clearly incorrect, mark it as `failed` and use your reasoning to refine the plan rather than looping.
+
+    Operational Structure:
+    - STRICT JSON ONLY: Your entire response MUST be a single valid JSON object. 
+    - NO WRAPPERS: Do NOT wrap your response in an array `[]`. Do NOT use prefixes like `[['TOOLS']]`, `EXEC:`, or `TOOLS:`.
+    - START WITH BRACE: Your response MUST start with the character `{` and end with `}`.
+    - Sub-Agents:
+      - "Deep Researcher": `web_search` (breadth) and `crawl_page` (depth).
+      - "Deep Analyzer": `reasoning` (complex logic, strategy pivots, data synthesis).
+
+    **Mandatory Output Format**:
+    ```json
+    {
+      "think": "Strategic reasoning in English...",
+      "tools": [
+        {"name": "tool_name", "arguments": {"arg": "val"}}
+      ]
+    }
+    ```
+
+  planning:
+    initial_plan: |
+      Analyze the user objective and decompose it into a list of specific sub-tasks.
+      Objective: {{task}}
+
+      Respond ONLY with a valid JSON list of tasks, where each task is a dictionary with:
+      - 'description': Clear explanation of the sub-task.
+      - 'priority': 'low', 'medium', or 'high'.
+      - 'category': A short tag like 'research', 'analysis', 'coding', etc.
+
+      Example format:
+      [
+        {"description": "Search for the specific survey data...", "priority": "high", "category": "research"},
+        {"description": "Calculate the response rate...", "priority": "medium", "category": "analysis"}
+      ]
+    task_input: "User Objective: {{task}}"
+
+  summary:
+    update_pre_messages: "Review the execution trajectory of the AGENTORCHESTRA sub-tasks."
+    update_post_messages: |
+      ### Strategic Evidence Review (Step {{step}}):
+      Task Roadmap Status: {{orchestra_tasks}}
+
+      User Objective: {{task}}
+
+      Your Goal: Analyze the current progress and create a "Strategic Evidence Ledger".
+      1. Consolidated Findings: Extract all factual data, links, and answers found so far.
+      2. Task Progress: Which tasks are 100% done? Which need more work?
+      3. Next Move: Based on the findings, what is the single most important next step?
+
+      This summary will serve as your core memory to prevent loss of detail in long trajectories.
+
+  final_answer:
+    pre_messages: "All AGENTORCHESTRA sub-tasks have been completed. It is time to synthesize the findings into a comprehensive final answer."
+    post_messages: |
+      Return the final answer by calling the `final_answer` tool. 
+      The `answer` argument MUST be a JSON-formatted string (or object) containing both your final strategic thinking and the factual answer.
+
+      Objective: {{task}}
+
+      Example Tool Call:
+      ```json
+      {
+        "name": "final_answer",
+        "arguments": {
+          "answer": {
+            "think": "In-depth final synthesis reasoning...",
+            "answer": "Complete, accurate, and professional answer addressing all parts of the objective."
+          }
+        }
+      }
+      ```
+
+  step:
+    pre_messages: |
+      # AGENTORCHESTRA Runtime Execution:
+      1. Check: `check_plan_progress` to see the current roadmap.
+      2. Pivot: If search is stuck, use `reasoning` to find a new angle.
+      3. Execute: Run tools (parallelize if possible).
+      4. Update: `update_plan_status` with findings.
+      5. Terminate: `final_answer` ONLY when the plan is 100% `completed`.
+
+      # Available Tools:
+      {{tool_functions_json}}
+
+      # Objective:
+      {{task}}
+  <<<END_YAML>>>
