@@ -1,123 +1,216 @@
-#  TodoEvolve
-This repository contains a comprehensive framework for decomposing planning algorithms, collecting data, training evolved models using LLaMA-Factory, and performing scalable inference. The project is divided into two core modules: EvolveCore and PlanFactory.
+<div align="center">
 
-1. Environment Installation
-To get started, we recommend using Conda to manage the environment.
+# TodoEvolve: Task-Adaptive Meta-Planning for LLM Agents
+
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![arXiv](https://img.shields.io/badge/arXiv-XXXX.XXXXX-red.svg)](https://arxiv.org)
+
+<!-- Optional: add your framework figure -->
+
+<!-- ![](assets/framework.png) -->
+
+</div>
+
+## Introduction
+
+This repo is the official implementation of **TodoEvolve**, a framework for **task-adaptive agentic planning**.
+
+Planning is a core capability of LLM-powered agents, enabling coherent long-horizon execution, global-state maintenance, and coordinated action. However, existing planning systems vary substantially across **planning targets** (single-agent vs multi-agent), **representational forms** (linear to-do, DAG, tree, hierarchical notes), and **domains** (web search, software engineering, embodied tasks). We posit that a universal, one-size-fits-all planner is unrealistic.
+
+TodoEvolve addresses this by learning a **meta-planner** that *customizes* planning systems to each task. Concretely, we optimize the meta-planner with **Impedance-Guided Preference Optimization (IGPO)**, a multi-objective preference learning objective that jointly promotes **performance**, **stability**, and **token efficiency**. The output is a task-specific to-do structure characterized by its **topology**, **initialization**, **adaptation**, and **navigation** strategy.
+
+---
+
+## Setup
+
+### 1. Environment Setup
 
 ```bash
 conda create -n TodoEvolve python=3.10
 conda activate TodoEvolve
 pip install -r requirements.txt
 ```
-If you intend to run the training pipeline (SFT or DPO), this project relies on the **[LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory)** ecosystem. So please refer to the official LLaMA-Factory Repository for detailed installation instructions regarding CUDA, PyTorch, and specific dependencies for efficient fine-tuning.
 
-2. Set up environment variables
+### 2. Training Dependencies (Optional)
 
-Following **[FlashSearcher](https://github.com/OPPO-PersonalAI/Flash-Searcher)**, our framework uses `SearchTool` and `CrawlTool` for web search and page crawling. These tools require setting environment variables with the corresponding API keys, depending on the selected provider:
+If you plan to run training (SFT or IGPO), this repo relies on the **[LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory)** ecosystem. Please follow LLaMA-Factory’s official installation instructions for CUDA/PyTorch/vLLM and efficient fine-tuning dependencies.
 
-* `SERPER_API_KEY` for SerpApi: [Serper](https://serper.dev/)
-* `JINA_API_KEY` for JinaApi: [JinaAI](https://jina.ai/)
+### 3. Configure Environment Variables
 
-Depending on the model you want to use, you may need to set environment variables. You need to set the `OPENAI_BASE_URL` ,`OPENAI_API_KEY` , `PLANNING_MODEL`, `EXECUTE_MODEL` and `JUDGE_MODEL` environment variable.
+Following **[FlashSearcher](https://github.com/OPPO-PersonalAI/Flash-Searcher)**, we use `SearchTool` and `CrawlTool` for web search and page crawling.
 
-# EvolveCore
+Set API keys for the selected provider:
 
-EvolveCore serves as the central engine for the project, organized into two primary directories: **FlashOAgents** for planning framework implementations and **PlanFactory** for high-throughput generation and inference.
+* `SERPER_API_KEY` for [Serper](https://serper.dev/)
+* `JINA_API_KEY` for [JinaAI](https://jina.ai/)
 
-## FlashOAgents (Planning Frameworks)
+Also set model-related environment variables:
 
-This module implements the decomposition of seven state-of-the-art planning frameworks. These implementations serve as the foundation for our data collection and agent exploration.
+* `OPENAI_BASE_URL`
+* `OPENAI_API_KEY`
+* `PLANNING_MODEL`
+* `EXECUTE_MODEL`
+* `JUDGE_MODEL`
+
+> **Tip**: Use a strong model for `JUDGE_MODEL` to improve preference quality for IGPO.
+
+---
+
+## PlanFactory (Planning System Decomposition)
+
+**PlanFactory** is a standardized codebase for decomposing and reproducing heterogeneous planning systems under a unified design space:
+
+* **Topology**: how the plan is structured (linear / DAG / tree / hierarchical)
+* **Initialization**: how the structure is instantiated from the task input
+* **Adaptation**: when/how the structure is revised during execution
+* **Navigation**: how executable directives are issued to the acting agent
 
 ### Supported Frameworks
-The following planning systems are implemented under `FlashOAgents/planning/` and `FlashOAgents/prompts/`:
 
-*   **[FlashSearcher](https://arxiv.org/abs/2509.25301)**
-*   **[OAgent](https://arxiv.org/abs/2506.15741)**
-*   **[Owl](https://arxiv.org/abs/2505.23885)**
-*   **[CoSight](https://arxiv.org/abs/2510.21557)**
-*   **[FlowSearch](https://arxiv.org/abs/2510.08521)**
-*   **[AgentOrchestra](https://arxiv.org/abs/2506.12508)**
-*   **[JoyAgent](https://arxiv.org/abs/2510.00510)**
+Implemented under `PlanFactory/planning/` and `PlanFactory/prompts/`:
+
+* **FlashSearcher**
+* **OAgent**
+* **Owl**
+* **CoSight**
+* **FlowSearch**
+* **AgentOrchestra**
+* **JoyAgent**
 
 ### Tools
-The underlying tools required to reproduce the functionality of these planning systems are located in:
-*   `tools.py`
-*   `cosight_tool.py`
 
-Collect raw train data using `PlanFactory/collect_train_data.py`
-```bash
-python collect_train_data.py --infile /path/to/benchmark_file.json --outfile ./output/train_data.jsonl --concurrency 10 --sample_num 20
-```
+Core tool abstractions:
 
-## PlanFactory (Generation & Inference)
+* `tools.py`
+* `cosight_tool.py`
 
-The PlanFactory directory handles data generation, plan simulation, and model inference. 
+---
 
-1. Launch vLLM Server(Optional): If you need to load a checkpoint for generation and inference, you must use the **vLLM** framework to launch an OpenAI-compatible API server.
+## TodoEvolve (Data Synthesis & Training)
 
-**Note:** This local vLLM instance specifically replaces the `PLANNING_MODEL` in the API calls. The `EXECUTE_MODEL` and `JUDGE_MODEL` configurations remain unchanged.
+**TodoEvolve** provides a full pipeline for:
 
-```bash
-python -m vllm.entrypoints.openai.api_server --model /path/to/your/saved/checkpoint --served-model-name your-model-name --port 8001 --trust-remote-code --gpu-memory-utilization 0.9 --max-model-len 30000 --dtype bfloat16
-```
+1. collecting planning trajectories from decomposed planning systems, and
+2. training a meta-planner via **SFT + IGPO**.
 
-2. Generate Plan System Only: Run the generator to create plans without full execution.
+### Collect Raw Training Data
 
 ```bash
-python generator_only.py --infile /path/to/benchmark_file --model /path/to/model --concurrency 50 
+python PlanFactory/collect_train_data.py \
+  --infile /path/to/benchmark_file.json \
+  --outfile ./output/train_data.jsonl \
+  --concurrency 10 \
+  --sample_num 20
 ```
 
-C. Run Inference Only: Execute inference on pre-generated data.
+---
+
+## Inference
+
+### 1. Launch vLLM Server (Optional)
+
+If you want to load a checkpoint for generation and inference, launch an OpenAI-compatible API server with **vLLM**:
 
 ```bash
-python run_inference_only.py --infile /path/to/benchmark_file --outfile ./output/result.jsonl --concurrency 1 --sample_num 20
+python -m vllm.entrypoints.openai.api_server \
+  --model /path/to/your/saved/checkpoint \
+  --served-model-name your-model-name \
+  --port 8001 \
+  --trust-remote-code \
+  --gpu-memory-utilization 0.9 \
+  --max-model-len 30000 \
+  --dtype bfloat16
 ```
 
-D. End-to-End Inference: Perform the complete generation and inference loop in a single step.
+This local vLLM instance replaces **only** the `PLANNING_MODEL`.
+`EXECUTE_MODEL` and `JUDGE_MODEL` remain unchanged.
+
+### 2. Generate Plans Only
 
 ```bash
-python model_infer.py --infile /path/to/benchmark_file --outfile ./output/result.jsonl --concurrency 1 --sample_num 20
+python generator_only.py \
+  --infile /path/to/benchmark_file \
+  --model /path/to/model \
+  --concurrency 50
 ```
 
-# Trainer
-
-This repository contains a collection of lightweight, efficient utility scripts designed to prepare, analyze, and validate datasets for Large Language Model (LLM) training. 
-
-1. Construct SFT Dataset
-
-Converts raw data into the standard Supervised Fine-Tuning (SFT) format.
+### 3. Inference Only (on pre-generated plans)
 
 ```bash
-python construct_SFTdataset.py --input_path ./data/raw_data --output_file ./data/sft_data_final.json
+python run_inference_only.py \
+  --infile /path/to/benchmark_file \
+  --outfile ./output/result.jsonl \
+  --concurrency 1 \
+  --sample_num 20
 ```
 
-2. Construct DPO Dataset
-
-Processes pairwise data for Direct Preference Optimization (DPO). It includes logic to filter samples based on correctness and "Cognitive Impedance" .
+### 4. End-to-End Inference
 
 ```bash
-python construct_DPOdataset.py --input_path ./data/dpo_raw --output_file ./data/dpo_data_final.json
+python model_infer.py \
+  --infile /path/to/benchmark_file \
+  --outfile ./output/result.jsonl \
+  --concurrency 1 \
+  --sample_num 20
 ```
 
-3. Analyze Dataset Statistics
+---
 
-Generates token length statistics for Input, Reasoning, and Output. Useful for paper writing and understanding data distribution.
+## Trainer Utilities
+
+This repo contains lightweight scripts for preparing, analyzing, and validating datasets for LLM training.
+
+### 1. Construct SFT Dataset
 
 ```bash
-python analyze_dataset.py --sft_file ./data/sft_data_final.json --dpo_file ./data/dpo_data_final.json
+python construct_SFTdataset.py \
+  --input_path ./data/raw_data \
+  --output_file ./data/sft_data_final.json
 ```
 
-4. Check Training Context Length
+### 2. Construct IGPO Dataset
 
-Use this script to determine the appropriate cutoff_len for your yaml configuration in LLaMA-Factory. It uses the actual tokenizer to account for special tokens and chat templates.
+Processes pairwise data for **Impedance-Guided Preference Optimization (IGPO)**, including filtering based on correctness and **cognitive impedance**.
 
-For SFT:
 ```bash
-python check_training_context_length.py --data ./data/sft_data_final.json --model /path/to/your/model_directory --mode sft
+python construct_DPOdataset.py \
+  --input_path ./data/igpo_raw \
+  --output_file ./data/igpo_data_final.json
 ```
-For DPO:
-```bash
-python check_training_context_length.py --data ./data/dpo_data_final.json --model /path/to/your/model_directory --mode dpo
+
+### 5. Training Execution
+
+Use scripts in `examples/train_full/` (inherited from **LLaMA-Factory**) to launch SFT/IGPO training.
+
+---
+
+## Citation
+
+If you find TodoEvolve helpful in your research, please kindly consider citing:
+
+```bibtex
+@misc{todoxxxx,
+  title={TodoEvolve: Task-Adaptive Meta-Planning via Impedance-Guided Preference Optimization},
+  author={...},
+  year={2026},
+  eprint={XXXX.XXXXX},
+  archivePrefix={arXiv},
+  primaryClass={cs.CL}
+}
 ```
-5. Training Execution
-To launch training, utilize the scripts provided in the examples/train_full/ directory (inherited from **[LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory)**).
+
+---
+
+## Acknowledgments
+
+This repo builds upon and adapts code from:
+
+* **[Flash-Searcher](https://github.com/OPPO-PersonalAI/Flash-Searcher)** — planning-oriented web execution and trajectory collection
+* **[LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory)** — training ecosystem for SFT and preference optimization
+
+---
+
+## License
+
+This project is licensed under the Apache License 2.0. See the [LICENSE](./LICENSE) file for details.
