@@ -1,6 +1,6 @@
 <div align="center">
 
-# TodoEvolve: Task-Adaptive Meta-Planning for LLM Agents
+# TodoEvolve: Task-Adaptive Meta-Planning for LLM Agents 🧭
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
@@ -12,7 +12,7 @@
 
 </div>
 
-## Introduction
+## 👋 Introduction
 
 This repo is the official implementation of **TodoEvolve**, a framework for **task-adaptive agentic planning**.
 
@@ -22,9 +22,9 @@ TodoEvolve addresses this by learning a **meta-planner** that *customizes* plann
 
 ---
 
-## Setup
+## 🌎 Setup
 
-### 1. Environment Setup
+### 1. Environment Setup 🛠️
 
 ```bash
 conda create -n TodoEvolve python=3.10
@@ -32,11 +32,11 @@ conda activate TodoEvolve
 pip install -r requirements.txt
 ```
 
-### 2. Training Dependencies (Optional)
+### 2. Training Dependencies (Optional) 🧪
 
 If you plan to run training (SFT or IGPO), this repo relies on the **[LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory)** ecosystem. Please follow LLaMA-Factory’s official installation instructions for CUDA/PyTorch/vLLM and efficient fine-tuning dependencies.
 
-### 3. Configure Environment Variables
+### 3. Configure Environment Variables 🔑
 
 Following **[FlashSearcher](https://github.com/OPPO-PersonalAI/Flash-Searcher)**, we use `SearchTool` and `CrawlTool` for web search and page crawling.
 
@@ -57,7 +57,7 @@ Also set model-related environment variables:
 
 ---
 
-## PlanFactory (Planning System Decomposition)
+## 🧩 PlanFactory (Planning System Decomposition)
 
 **PlanFactory** is a standardized codebase for decomposing and reproducing heterogeneous planning systems under a unified design space:
 
@@ -66,28 +66,30 @@ Also set model-related environment variables:
 * **Adaptation**: when/how the structure is revised during execution
 * **Navigation**: how executable directives are issued to the acting agent
 
-### Supported Frameworks
+### Supported Frameworks 📚
 
 Implemented under `PlanFactory/planning/` and `PlanFactory/prompts/`:
 
-* **FlashSearcher**
-* **OAgent**
-* **Owl**
-* **CoSight**
-* **FlowSearch**
-* **AgentOrchestra**
-* **JoyAgent**
+| Planning System    | Source |
+| ------------------ | ------ |
+| **FlashSearcher**  |  https://github.com/OPPO-PersonalAI/Flash-Searcher      |
+| **OAgent**         |    https://github.com/OPPO-PersonalAI/OAgents    |
+| **Owl**            |    https://github.com/camel-ai/owl    |
+| **CoSight**        |   https://github.com/ZTE-AICloud/Co-Sight     |
+| **FlowSearch**     |  https://github.com/InternScience/InternAgent      |
+| **AgentOrchestra** |  https://github.com/SkyworkAI/DeepResearchAgent      |
+| **JoyAgent**       |  https://github.com/jd-opensource/joyagent-jdgenie      |
 
-### Tools
+### Tools 🧰
 
 Core tool abstractions:
 
 * `tools.py`
 * `cosight_tool.py`
 
-### Inference: Running Decomposed Systems
+### Inference: Running Decomposed Systems ▶️
 
-To reproduce the planning behaviors of the supported frameworks, run the unified entry script and specify the target system. The configuration for these systems are mapped in `EvolveCore/FlashOAgent/agents.py` (lines 598-607). 
+To reproduce the planning behaviors of the supported frameworks, run the unified entry script and specify the target system. The configuration for these systems are mapped in `EvolveCore/FlashOAgent/agents.py` (lines 598-607).
 
 ```bash
 python run_flash_searcher.py \
@@ -98,17 +100,16 @@ python run_flash_searcher.py \
   --planning_system <PLAN_SYSTEM_NAME>
 ```
 
-
 ---
 
-## TodoEvolve (Data Synthesis & Training)
+## 🧪 TodoEvolve (Data Synthesis & Training)
 
 **TodoEvolve** provides a full pipeline for:
 
 1. collecting planning trajectories from decomposed planning systems, and
 2. training a meta-planner via **SFT + IGPO**.
 
-### Collect Raw Training Data
+### Collect Raw Training Data 📦
 
 ```bash
 python PlanFactory/collect_train_data.py \
@@ -120,9 +121,9 @@ python PlanFactory/collect_train_data.py \
 
 ---
 
-## Inference
+## 🚀 Inference
 
-### 1. Launch vLLM Server (Optional)
+### 1. Launch vLLM Server (Optional) 🖥️
 
 If you want to load a checkpoint for generation and inference, launch an OpenAI-compatible API server with **vLLM**:
 
@@ -140,7 +141,7 @@ python -m vllm.entrypoints.openai.api_server \
 This local vLLM instance replaces **only** the `PLANNING_MODEL`.
 `EXECUTE_MODEL` and `JUDGE_MODEL` remain unchanged.
 
-### 2. Generate Plans Only
+### 2. Generate Plans Only 🧱
 
 ```bash
 python generator_only.py \
@@ -149,7 +150,7 @@ python generator_only.py \
   --concurrency 50
 ```
 
-### 3. Inference Only (on pre-generated plans)
+### 3. Inference Only (on pre-generated plans) 🔍
 
 ```bash
 python run_inference_only.py \
@@ -159,7 +160,7 @@ python run_inference_only.py \
   --sample_num 20
 ```
 
-### 4. End-to-End Inference
+### 4. End-to-End Inference 🔁
 
 ```bash
 python model_infer.py \
@@ -171,11 +172,11 @@ python model_infer.py \
 
 ---
 
-## Trainer Utilities
+## 🧰 Trainer Utilities
 
 This repo contains lightweight scripts for preparing, analyzing, and validating datasets for LLM training.
 
-### 1. Construct SFT Dataset
+### 1. Construct SFT Dataset 🧾
 
 ```bash
 python construct_SFTdataset.py \
@@ -183,7 +184,7 @@ python construct_SFTdataset.py \
   --output_file ./data/sft_data_final.json
 ```
 
-### 2. Construct IGPO Dataset
+### 2. Construct IGPO Dataset 🧠
 
 Processes pairwise data for **Impedance-Guided Preference Optimization (IGPO)**, including filtering based on correctness and **cognitive impedance**.
 
@@ -193,17 +194,17 @@ python construct_DPOdataset.py \
   --output_file ./data/igpo_data_final.json
 ```
 
-### 3. Training Execution
+### 3. Training Execution 🏋️
 
 Use scripts in `examples/train_full/` (inherited from **LLaMA-Factory**) to launch SFT/IGPO training.
 
-### 4. Checkpoints
+### 4. Checkpoints 📌
 
 Our fine-tuned **Todo-14B** model weights are available on Hugging Face at [https://huggingface.co/EcthelionLiu/Todo-14B](https://huggingface.co/EcthelionLiu/Todo-14B).
 
 ---
 
-## Citation
+## 🫡 Citation
 
 If you find TodoEvolve helpful in your research, please kindly consider citing:
 
@@ -220,7 +221,7 @@ If you find TodoEvolve helpful in your research, please kindly consider citing:
 
 ---
 
-## Acknowledgments
+## 🙏 Acknowledgments
 
 This repo builds upon and adapts code from:
 
@@ -229,6 +230,6 @@ This repo builds upon and adapts code from:
 
 ---
 
-## License
+## 📄 License
 
 This project is licensed under the Apache License 2.0. See the [LICENSE](./LICENSE) file for details.
