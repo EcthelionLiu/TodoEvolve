@@ -199,9 +199,7 @@ Use scripts in `examples/train_full/` (inherited from **LLaMA-Factory**) to laun
 
 ### 4. Checkpoints
 
-Our fine-tuned model weights are available on Hugging Face. You can access the **Todo-14B** model at the link below:
-
-* **Todo-14B**: [https://huggingface.co/EcthelionLiu/Todo-14B](https://huggingface.co/EcthelionLiu/Todo-14B)
+Our fine-tuned **Todo-14B** model weights are available on Hugging Face at [https://huggingface.co/EcthelionLiu/Todo-14B](https://huggingface.co/EcthelionLiu/Todo-14B).
 
 ---
 
