@@ -85,6 +85,20 @@ Core tool abstractions:
 * `tools.py`
 * `cosight_tool.py`
 
+### Inference: Running Decomposed Systems
+
+To reproduce the planning behaviors of the supported frameworks, run the unified entry script and specify the target system. The configuration for these systems are mapped in `EvolveCore/FlashOAgent/agents.py` (lines 598-607). 
+
+```bash
+python run_flash_searcher.py \
+  --infile /path/to/benchmark_file.json \
+  --outfile ./output/result.jsonl \
+  --max_steps 40 \
+  --sample_num 20 \
+  --planning_system <PLAN_SYSTEM_NAME>
+```
+
+
 ---
 
 ## TodoEvolve (Data Synthesis & Training)
@@ -179,9 +193,15 @@ python construct_DPOdataset.py \
   --output_file ./data/igpo_data_final.json
 ```
 
-### 5. Training Execution
+### 3. Training Execution
 
 Use scripts in `examples/train_full/` (inherited from **LLaMA-Factory**) to launch SFT/IGPO training.
+
+### 4. Checkpoints
+
+Our fine-tuned model weights are available on Hugging Face. You can access the **Todo-14B** model at the link below:
+
+* **Todo-14B**: [https://huggingface.co/EcthelionLiu/Todo-14B](https://huggingface.co/EcthelionLiu/Todo-14B)
 
 ---
 
