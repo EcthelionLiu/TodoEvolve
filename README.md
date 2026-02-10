@@ -4,7 +4,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![arXiv](https://img.shields.io/arxiv/v/2602.07839)](https://arxiv.org/abs/2602.07839)
+[![arXiv](https://img.shields.io/badge/arXiv-2602.07839-b31b1b.svg)](https://arxiv.org/abs/2602.07839)
 
 <!-- Optional: add your framework figure -->
 
