@@ -4,7 +4,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![arXiv](https://img.shields.io/badge/arXiv-XXXX.XXXXX-red.svg)](https://arxiv.org)
+[![arXiv](https://img.shields.io/arxiv/v/2602.07839)](https://arxiv.org/abs/2602.07839)
 
 <!-- Optional: add your framework figure -->
 
@@ -209,13 +209,14 @@ Our fine-tuned **Todo-14B** model weights are available on Hugging Face at [http
 If you find TodoEvolve helpful in your research, please kindly consider citing:
 
 ```bibtex
-@misc{todoxxxx,
-  title={TodoEvolve: Task-Adaptive Meta-Planning via Impedance-Guided Preference Optimization},
-  author={...},
-  year={2026},
-  eprint={XXXX.XXXXX},
-  archivePrefix={arXiv},
-  primaryClass={cs.CL}
+@misc{liu2026todoevolvelearningarchitectagent,
+      title={TodoEvolve: Learning to Architect Agent Planning Systems}, 
+      author={Jiaxi Liu and Yanzuo Jiang and Guibin Zhang and Zihan Zhang and Heng Chang and Zhenfei Yin and Qibing Ren and Junchi Yan},
+      year={2026},
+      eprint={2602.07839},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2602.07839}, 
 }
 ```
 
